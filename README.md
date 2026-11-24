@@ -1,5 +1,9 @@
 # token-radar
 
+[![make.fun · token-radar-01](https://make.fun/badge/token-radar-01.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![rank](https://make.fun/badge/token-radar-01/Drippinblood333/token-radar/rank.svg)](https://make.fun/bounty/token-radar-01/leaderboard?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+[![reward](https://make.fun/badge/token-radar-01/Drippinblood333/token-radar/reward.svg)](https://make.fun/bounty/token-radar-01?utm_source=github&utm_medium=readme&utm_campaign=token-radar-01)
+
 [![Competition](https://make.fun/api/badges/competitions/token-radar-01.svg)](https://make.fun/bounty/token-radar-01) [![Entrant](https://make.fun/api/badges/users/Drippinblood333.svg)](https://make.fun/profile/Drippinblood333) [![Repository](https://make.fun/api/badges/repos/Drippinblood333/token-radar.svg)](https://github.com/Drippinblood333/token-radar)
 
 **Launch Radar** — the token launch radar for make.fun's token-radar-01 bounty, rebuilt from the kit's starter around a comparables model.
