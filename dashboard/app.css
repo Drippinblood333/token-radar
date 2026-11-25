@@ -80,6 +80,24 @@ tr.top .rank { color: var(--amber); }
 .peers h2, .detail h2 { font-size: 17px; margin: 0 0 8px; }
 .peers p { color: var(--muted); font-size: 13.5px; margin: 0 0 10px; max-width: 760px; }
 .peers table { font-size: 13.5px; }
+tr.me td { background: rgba(245, 184, 61, 0.12); font-weight: 650; }
+tr.me td .value { color: var(--amber); }
+
+/* Model sandbox */
+.sandbox-link { display: inline-block; padding: 7px 12px; border: 1px solid var(--teal-dim); border-radius: 8px; color: var(--teal); font-size: 13.5px; font-weight: 650; white-space: nowrap; }
+.sandbox-link:hover { background: rgba(45, 212, 191, 0.08); text-decoration: none; }
+.sandbox h1 { font-size: 24px; margin: 0 0 8px; }
+.sliders { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px 18px; margin: 14px 0; }
+.slider-row { display: grid; grid-template-columns: minmax(240px, 1.1fr) 1.6fr minmax(220px, 1fr); gap: 14px; align-items: center; padding: 9px 0; border-bottom: 1px solid var(--line); }
+.slider-row:last-child { border-bottom: 0; }
+.slider-row label { font-size: 13.5px; color: var(--text); }
+.slider-row label b { color: var(--teal); font-variant-numeric: tabular-nums; }
+.slider-row input[type="range"] { width: 100%; accent-color: var(--teal); }
+.slider-row .hint, .sandbox-actions .hint { color: var(--muted); font-size: 12.5px; }
+.sandbox-actions { display: flex; gap: 14px; align-items: center; margin: 4px 0 14px; }
+#sb-summary { margin: 0 0 10px; }
+#sb-body tr { cursor: pointer; }
+#sb-body tr:hover { background: rgba(45, 212, 191, 0.06); }
 
 /* Detail */
 .back { display: inline-block; margin-bottom: 14px; }

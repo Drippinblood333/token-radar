@@ -25,7 +25,7 @@ Set aside before ranking: bridge and canonical-bridge entries (denominations of 
 
 ## The dashboard
 
-A dark, sortable, filterable board (search, category, chain, watchlist-only) with a per-protocol detail view: the model's inputs, the peer multiple, the three adjustment factors, and a five-step farm plan with capital ranges set by TVL tier, per-chain fee estimates, and weekly time commitments. Plans rotate wording on a hash of the slug, so 200 plans do not read as one plan pasted 200 times. Views live in the URL hash (`#/`, `#/?cat=...`, `#/p/<slug>`).
+A dark, sortable, filterable board (search, category, chain, watchlist-only) with a per-protocol detail view: the model's inputs, the peer multiple, the three adjustment factors, a same-category peer table (pre-token peers priced the same way, plus the launched comparables the multiple was read from), and a five-step farm plan with capital ranges set by TVL tier, per-chain fee estimates, and weekly time commitments. Plans rotate wording on a hash of the slug, so 200 plans do not read as one plan pasted 200 times. A model sandbox (`#/sandbox`) re-prices the whole board live from four sliders — multiple shrinkage, momentum weight, maturity amplitude, chain-breadth bonus — so a reader can see which assumptions the ranking rests on. Views live in the URL hash (`#/`, `#/?cat=...&chain=...`, `#/p/<slug>`, `#/sandbox?...`).
 
 ## Run it
 

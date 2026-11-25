@@ -32,10 +32,15 @@
 
   function parseHash() {
     var h = location.hash.replace(/^#/, '');
-    var state = { view: 'board', slug: null, q: '', cat: '', chain: '', wl: false, sort: 'r', dir: 1 };
+    var state = { view: 'board', slug: null, q: '', cat: '', chain: '', wl: false, sort: 'r', dir: 1, sb: null };
     if (h.indexOf('/p/') === 0) {
       state.view = 'detail';
       state.slug = decodeURIComponent(h.slice(3));
+      return state;
+    }
+    if (h.indexOf('/sandbox') === 0) {
+      state.view = 'sandbox';
+      state.sb = sandboxParams(h.indexOf('?') >= 0 ? h.slice(h.indexOf('?') + 1) : '');
       return state;
     }
     var qm = h.indexOf('?');
@@ -60,6 +65,45 @@
     if (state.dir === -1) p.set('dir', '-1');
     var s = p.toString();
     return '#/' + (s ? '?' + s : '');
+  }
+
+  // --- Model sandbox: the same pricing, re-run live with different weights. ---
+  // Defaults (s=8, mw=0.6, ma=0.35, bb=0.03) are the board's own model; moving a slider
+  // re-prices every row from its snapshot figures and re-ranks the board, so a reader can
+  // see which calls the ranking actually rests on. The $1B+ size dampener stays fixed.
+  var SB_DEFAULT = { s: 8, mw: 0.6, ma: 0.35, bb: 0.03 };
+  function sandboxParams(qs) {
+    var p = { s: SB_DEFAULT.s, mw: SB_DEFAULT.mw, ma: SB_DEFAULT.ma, bb: SB_DEFAULT.bb };
+    if (!qs) return p;
+    var q = new URLSearchParams(qs);
+    var num = function (k, lo, hi, dflt) {
+      var v = parseFloat(q.get(k) || '');
+      return Number.isFinite(v) ? Math.min(hi, Math.max(lo, v)) : dflt;
+    };
+    p.s = num('s', 0, 40, SB_DEFAULT.s);
+    p.mw = num('mw', 0, 1.2, SB_DEFAULT.mw);
+    p.ma = num('ma', 0, 0.8, SB_DEFAULT.ma);
+    p.bb = num('bb', 0, 0.06, SB_DEFAULT.bb);
+    return p;
+  }
+  function sandboxHash(p) {
+    return '#/sandbox?s=' + p.s + '&mw=' + p.mw + '&ma=' + p.ma + '&bb=' + p.bb;
+  }
+  function clampNum(x, lo, hi) { return Math.min(hi, Math.max(lo, x)); }
+  function recompute(row, p) {
+    var multiple = clampNum((row.cn * row.cm + p.s * DATA.global_multiple) / (row.cn + p.s), 0.05, 8);
+    var momentum = row.c7 === null ? 1 : 1 + (clampNum(row.c7, -25, 40) / 100) * p.mw;
+    var maturity = row.age === null ? 0.9 : 0.8 + p.ma * (1 - Math.exp(-(row.age / 365) / 2.5));
+    var breadth = 1 + p.bb * Math.min(Math.max(row.ch.length - 1, 0), 5);
+    var size = row.t > 1e9 ? Math.pow(1e9 / row.t, 0.08) : 1;
+    return Math.max(1, Math.round(row.t * multiple * momentum * maturity * breadth * size));
+  }
+  function sandboxRows(p) {
+    return DATA.rows.map(function (row) {
+      return { row: row, v: recompute(row, p) };
+    }).sort(function (a, b) {
+      return b.v - a.v || b.row.t - a.row.t || (a.row.s < b.row.s ? -1 : 1);
+    });
   }
 
   function masthead() {
@@ -160,6 +204,7 @@
       '<select id="cat" aria-label="Filter by category">' + catOpts + '</select>' +
       '<select id="chain" aria-label="Filter by chain">' + chainOpts + '</select>' +
       '<label class="check"><input type="checkbox" id="wl"' + (state.wl ? ' checked' : '') + '> Watchlist only</label>' +
+      '<a class="sandbox-link" href="#/sandbox">Model sandbox: re-price the board →</a>' +
       '<span class="count">Showing ' + rows.length + ' of ' + DATA.rows.length + '</span></div>' +
       '<table aria-label="Pre-token protocols ranked by implied value"><thead><tr>' + thead + '</tr></thead><tbody>' +
       (body || '<tr><td colspan="7" class="empty">No protocol matches those filters.</td></tr>') +
@@ -217,6 +262,38 @@
     if (!row) { renderBoard(parseHash()); return; }
     var base = row.t * row.m;
     var steps = row.steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('');
+    // Same-category peers, priced the same way: where this protocol sits among the
+    // pre-token names it is actually competing with for a launch.
+    var peers = DATA.rows.filter(function (r) { return r.cat === row.cat; }).sort(function (a, b) { return b.v - a.v; });
+    var inCat = 0;
+    peers.forEach(function (r, i) { if (r.s === row.s) inCat = i + 1; });
+    var shown = peers.slice(0, 8);
+    if (inCat > 8) shown.push(row);
+    var peerRows = shown.map(function (r, i) {
+      var gap = i === shown.length - 1 && inCat > 8 && r.s === row.s;
+      return (gap ? '<tr><td colspan="6" class="empty">…</td></tr>' : '') +
+        '<tr' + (r.s === row.s ? ' class="me"' : '') + ' data-slug="' + esc(r.s) + '">' +
+        '<td class="rank">' + r.r + '</td><td class="name">' + esc(r.n) + (r.s === row.s ? ' ← this protocol' : '') + '</td>' +
+        '<td class="num">' + money(r.t) + '</td><td class="num">' + r.m.toFixed(2) + 'x</td>' +
+        '<td class="num value">' + money(r.v) + '</td><td class="num">' + (r.v / r.t).toFixed(2) + 'x</td></tr>';
+    }).join('');
+    var peerSection =
+      '<section class="detail peers"><h2>Same-category peers: ' + esc(row.cat || 'Uncategorised') + '</h2>' +
+      '<p>' + esc(row.n) + ' sits #' + inCat + ' of ' + peers.length + ' pre-token ' + esc(row.cat || '') + ' protocols on this board, priced with the same category multiple and the same adjustments. The launched names below are the comparables that multiple was read from.</p>' +
+      '<table aria-label="Pre-token peers in the same category"><thead><tr><th>Rank</th><th>Protocol</th><th class="num">TVL</th><th class="num">Multiple</th><th class="num">Implied value</th><th class="num">Value / TVL</th></tr></thead><tbody>' +
+      peerRows + '</tbody></table></section>';
+    var launched = (DATA.catLive && DATA.catLive[row.cat || '(none)']) || [];
+    var launchedSection = '';
+    if (launched.length) {
+      var launchedRows = launched.map(function (p) {
+        return '<tr><td class="name">' + esc(p.n) + '</td><td class="num">' + money(p.mcap) + '</td><td class="num">' + money(p.t) + '</td><td class="num">' + p.m.toFixed(2) + 'x</td></tr>';
+      }).join('');
+      launchedSection =
+        '<section class="detail peers"><h2>Launched comparables in ' + esc(row.cat || 'this category') + '</h2>' +
+        '<p>The category multiple of ' + row.m.toFixed(2) + 'x (raw median ' + row.cm.toFixed(2) + 'x across ' + row.cn + ' launched names, shrunk toward the global ' + DATA.global_multiple.toFixed(2) + 'x) is read from names like these — not from a fixed list.</p>' +
+        '<table aria-label="Launched comparables in this category"><thead><tr><th>Protocol</th><th class="num">Market cap</th><th class="num">TVL</th><th class="num">Mcap / TVL</th></tr></thead><tbody>' +
+        launchedRows + '</tbody></table></section>';
+    }
     main.innerHTML =
       '<a class="back" href="#/">← Back to the board</a>' +
       '<div class="detail-head"><div><h1>' + esc(row.n) + (row.w === 1 ? '<span class="wl">watchlist</span>' : '') + '</h1>' +
@@ -233,10 +310,85 @@
       '<section class="detail"><h2>How the model moves it</h2>' +
       factor('7-day momentum', row.f[0]) + factor('Years live, no token', row.f[1]) + factor('Chain breadth', row.f[2]) +
       '<p class="note">Base value ' + money(Math.round(base)) + ' is adjusted by the three factors above (and a size dampener past $1B of TVL) to the implied value of ' + money(row.v) + '. ' +
-      'The multiple is the median market-cap/TVL of launched ' + esc(row.cat || '') + ' protocols, shrunk toward the global median of ' + DATA.global_multiple.toFixed(2) + 'x.</p></section>' +
+      'The multiple is the median market-cap/TVL of launched ' + esc(row.cat || '') + ' protocols, shrunk toward the global median of ' + DATA.global_multiple.toFixed(2) + 'x. ' +
+      '<a href="#/sandbox">Re-price it yourself in the model sandbox →</a></p></section>' +
+      peerSection + launchedSection +
       '<section class="detail"><h2>Farm plan</h2><ol class="steps">' + steps + '</ol>' +
       '<p class="note">No step here promises a token or an airdrop: the plan builds the usage record a launch would most plausibly reward, at a cost and pace a person can actually keep.</p></section>' +
       footer();
+    Array.prototype.forEach.call(main.querySelectorAll('tr[data-slug]'), function (tr) {
+      tr.addEventListener('click', function () {
+        location.hash = '#/p/' + encodeURIComponent(tr.getAttribute('data-slug'));
+      });
+    });
+    main.removeAttribute('aria-busy');
+    window.scrollTo(0, 0);
+  }
+
+  function sliderRow(id, label, min, max, step, value, unit, hint) {
+    return '<div class="slider-row"><label for="' + id + '">' + label + ' <b id="' + id + '-val">' + value + unit + '</b></label>' +
+      '<input type="range" id="' + id + '" min="' + min + '" max="' + max + '" step="' + step + '" value="' + value + '">' +
+      '<span class="hint">' + hint + '</span></div>';
+  }
+
+  function renderSandbox(state) {
+    var p = state.sb;
+    main.innerHTML =
+      masthead() +
+      '<a class="back" href="#/">← Back to the board</a>' +
+      '<section class="detail sandbox"><h1>Model sandbox</h1>' +
+      '<p class="note">The board prices every protocol as TVL × category multiple × momentum × maturity × breadth, with a dampener past $1B of TVL. ' +
+      'Move a slider and the whole board re-prices from the same snapshot figures — the ranking below is live, not a picture. ' +
+      'Defaults are the board\'s own model (shrinkage 8, momentum weight 0.6, maturity 0.35, breadth 0.03); the size dampener stays fixed. ' +
+      'Sandbox values are the model\'s raw recomputation; the published board then shaves $1 where two rows would tie, so ranks stay strictly ordered.</p>' +
+      '<div class="sliders">' +
+      sliderRow('sb-s', 'Multiple shrinkage (blend weight toward the global median)', 0, 40, 1, p.s, '', '0 = raw category median, 40 = nearly the global 0.21x for every category') +
+      sliderRow('sb-mw', 'Momentum weight (7-day TVL change)', 0, 1.2, 0.05, p.mw, '', '0 = ignore the last 7 days, 1.2 = let a hot week move the price') +
+      sliderRow('sb-ma', 'Maturity amplitude (years live with no token)', 0, 0.8, 0.05, p.ma, '', '0 = age counts for nothing, 0.8 = old and tokenless is worth much more') +
+      sliderRow('sb-bb', 'Breadth bonus (per extra chain, up to 5)', 0, 0.06, 0.005, p.bb, '', '0 = chains don\'t matter, 0.06 = multi-chain counts double') +
+      '</div>' +
+      '<div class="sandbox-actions"><a class="sandbox-link" href="#/sandbox">Reset to the board\'s model</a> <span class="hint" id="sb-share">Shareable: these settings live in the page address.</span></div>' +
+      '<div id="sb-summary" class="note"></div>' +
+      '<table aria-label="Board re-priced with sandbox settings"><thead><tr><th>New rank</th><th>Protocol</th><th class="num">Implied value</th><th class="num">Board rank</th><th class="num">Rank change</th><th class="num">Value change</th></tr></thead><tbody id="sb-body"></tbody></table>' +
+      '</section>' +
+      footer();
+    var draw = function () {
+      var cur = {
+        s: parseFloat(document.getElementById('sb-s').value),
+        mw: parseFloat(document.getElementById('sb-mw').value),
+        ma: parseFloat(document.getElementById('sb-ma').value),
+        bb: parseFloat(document.getElementById('sb-bb').value),
+      };
+      document.getElementById('sb-s-val').textContent = cur.s;
+      document.getElementById('sb-mw-val').textContent = cur.mw.toFixed(2);
+      document.getElementById('sb-ma-val').textContent = cur.ma.toFixed(2);
+      document.getElementById('sb-bb-val').textContent = cur.bb.toFixed(3);
+      var ranked = sandboxRows(cur);
+      var moved = 0, top = ranked.slice(0, 15);
+      ranked.slice(0, 10).forEach(function (it, i) { if (it.row.r !== i + 1) moved++; });
+      document.getElementById('sb-summary').textContent =
+        'Top 10 under these settings: ' + moved + ' of 10 changed rank against the published board. ' +
+        'Biggest mover in the top 15: ' + top.map(function (it) { return Math.abs(it.row.r - (ranked.indexOf(it) + 1)); }).reduce(function (a, b) { return Math.max(a, b); }, 0) + ' places.';
+      document.getElementById('sb-body').innerHTML = top.map(function (it, i) {
+        var dRank = it.row.r - (i + 1);
+        var dVal = ((it.v - it.row.v) / it.row.v * 100);
+        return '<tr data-slug="' + esc(it.row.s) + '"' + (i < 3 ? ' class="top"' : '') + '>' +
+          '<td class="rank">' + (i + 1) + '</td><td class="name">' + esc(it.row.n) + '</td>' +
+          '<td class="num value">' + money(it.v) + '</td><td class="num">' + it.row.r + '</td>' +
+          '<td class="num">' + (dRank > 0 ? '+' + dRank : dRank) + '</td>' +
+          '<td class="num">' + (dVal > 0 ? '+' : '') + dVal.toFixed(1) + '%</td></tr>';
+      }).join('');
+      Array.prototype.forEach.call(document.querySelectorAll('#sb-body tr[data-slug]'), function (tr) {
+        tr.addEventListener('click', function () {
+          location.hash = '#/p/' + encodeURIComponent(tr.getAttribute('data-slug'));
+        });
+      });
+      history.replaceState(null, '', sandboxHash(cur));
+    };
+    ['sb-s', 'sb-mw', 'sb-ma', 'sb-bb'].forEach(function (id) {
+      document.getElementById(id).addEventListener('input', draw);
+    });
+    draw();
     main.removeAttribute('aria-busy');
     window.scrollTo(0, 0);
   }
@@ -248,6 +400,7 @@
       return;
     }
     if (state.view === 'detail') renderDetail(state);
+    else if (state.view === 'sandbox') renderSandbox(state);
     else renderBoard(state);
   }
   window.addEventListener('hashchange', render);

@@ -31,7 +31,7 @@ export interface Snapshot {
   watchlist: string[];
 }
 
-export const MODEL_VERSION = 'launch-radar-2';
+export const MODEL_VERSION = 'launch-radar-3';
 
 /** How many rows the board carries: the whole 40-name watchlist plus the best of the rest. */
 export const BOARD_ROWS = 200;
@@ -55,6 +55,8 @@ export interface RadarRow {
   ch: string[]; // chains
   age: number | null; // days listed, null when the snapshot does not say
   m: number; // category multiple used, rounded to 3dp for display
+  cm: number; // raw category median mcap/TVL before shrinkage, unclamped, 6dp
+  cn: number; // launched protocols counted in this category
   f: [number, number, number]; // momentum, maturity, breadth factors, 3dp
   w: 0 | 1; // 1 when the protocol is on the snapshot's watchlist
   steps: string[];
@@ -78,6 +80,8 @@ export interface RadarData {
   global_multiple: number;
   rows: RadarRow[];
   live: LiveRow[];
+  /** Launched comparables per category (up to 4 each, by market cap): the peer table's other half. */
+  catLive: Record<string, LiveRow[]>;
 }
 
 /** Days between two YYYY-MM-DD dates, or null when either side is missing. */
@@ -101,13 +105,19 @@ function clamp(x: number, lo: number, hi: number): number {
 
 const round3 = (x: number): number => Math.round(x * 1000) / 1000;
 
+/** Six decimals: the sandbox re-runs the blend from these, so rounding must not move a price. */
+const round6 = (x: number): number => Math.round(x * 1_000_000) / 1_000_000;
+
 /**
  * The comparables table: for every category, the median mcap/TVL of its launched protocols,
  * blended with the global median by count so a category with two thin comps does not price
  * a giant off noise. Multiples are clamped to [0.05, 8] — beyond that the ratio is measuring
  * something other than a launch price (a dead token, a custodial balance sheet).
+ * `raw` and `counts` are the unshrunk medians and their sample sizes, so the dashboard's
+ * model sandbox can re-run the shrinkage with a different blend weight and land on the
+ * same numbers the board uses at the default weight of 8.
  */
-export function categoryMultiples(snapshot: Snapshot): { byCategory: Map<string, number>; global: number } {
+export function categoryMultiples(snapshot: Snapshot): { byCategory: Map<string, number>; global: number; raw: Map<string, number>; counts: Map<string, number> } {
   const launched = snapshot.protocols.filter((p) => p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
   const global = clamp(median(launched.map((p) => p.mcap_usd! / p.tvl_usd)), 0.05, 8);
   const groups = new Map<string, number[]>();
@@ -118,11 +128,18 @@ export function categoryMultiples(snapshot: Snapshot): { byCategory: Map<string,
     groups.set(key, list);
   }
   const byCategory = new Map<string, number>();
+  const raw = new Map<string, number>();
+  const counts = new Map<string, number>();
   for (const [key, list] of groups) {
+    // Raw is the median itself, unclamped: the board clamps only after blending, and the
+    // sandbox must be able to repeat that order (a clamped raw median would price
+    // Prediction Market at 1.08x instead of the board's 8x). Counts are the sample sizes.
+    raw.set(key, median(list));
+    counts.set(key, list.length);
     const blended = (list.length * median(list) + 8 * global) / (list.length + 8);
     byCategory.set(key, clamp(blended, 0.05, 8));
   }
-  return { byCategory, global };
+  return { byCategory, global, raw, counts };
 }
 
 const WRAPPED_WORD = /\b(wrapped|staked|staking)\b/i;
@@ -377,7 +394,7 @@ export function farmSteps(p: SnapshotProtocol): string[] {
 }
 
 /** The board: every rankable candidate priced, the best 200 kept, the watchlist always in. */
-export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; scored: Scored[]; multiples: { byCategory: Map<string, number>; global: number } } {
+export function buildBoard(snapshot: Snapshot): { board: BoardRow[]; scored: Scored[]; multiples: { byCategory: Map<string, number>; global: number; raw: Map<string, number>; counts: Map<string, number> } } {
   const multiples = categoryMultiples(snapshot);
   const watch = new Set(snapshot.watchlist);
   const all = snapshot.protocols.filter(isRankable).map((p) => impliedValue(p, snapshot.as_of, multiples));
@@ -410,6 +427,29 @@ export function liveRows(snapshot: Snapshot): LiveRow[] {
     .map((p) => ({ s: p.slug, n: p.name, mcap: p.mcap_usd!, t: p.tvl_usd, m: round3(p.mcap_usd! / p.tvl_usd) }));
 }
 
+/**
+ * Launched comparables per category, up to four each by market cap: the detail view's
+ * peer table shows a protocol next to the launched names its own multiple was read from.
+ */
+export function categoryLive(snapshot: Snapshot): Record<string, LiveRow[]> {
+  const groups = new Map<string, SnapshotProtocol[]>();
+  for (const p of snapshot.protocols) {
+    if (p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
+    const key = p.category ?? '(none)';
+    const list = groups.get(key) ?? [];
+    list.push(p);
+    groups.set(key, list);
+  }
+  const out: Record<string, LiveRow[]> = {};
+  for (const [key, list] of groups) {
+    out[key] = list
+      .sort((a, b) => b.mcap_usd! - a.mcap_usd!)
+      .slice(0, 4)
+      .map((p) => ({ s: p.slug, n: p.name, mcap: p.mcap_usd!, t: p.tvl_usd, m: round3(p.mcap_usd! / p.tvl_usd) }));
+  }
+  return out;
+}
+
 export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: RadarData } {
   const { board, scored, multiples } = buildBoard(snapshot);
   const watch = new Set(snapshot.watchlist);
@@ -426,6 +466,8 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
       ch: s.protocol.chains,
       age: s.age,
       m: round3(s.multiple),
+      cm: round6(multiples.raw.get(s.protocol.category ?? '(none)') ?? multiples.global),
+      cn: multiples.counts.get(s.protocol.category ?? '(none)') ?? 0,
       f: [round3(s.momentum), round3(s.maturity), round3(s.breadth)],
       w: watch.has(row.slug) ? 1 : 0,
       steps: row.farm_steps,
@@ -439,9 +481,10 @@ export function buildRadar(snapshot: Snapshot): { board: BoardRow[]; radar: Rada
     watchlist_size: snapshot.watchlist.length,
     early_size: board.length,
     live_size: live.length,
-    global_multiple: round3(multiples.global),
+    global_multiple: round6(multiples.global),
     rows,
     live,
+    catLive: categoryLive(snapshot),
   };
   return { board, radar };
 }
